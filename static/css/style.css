@@ -1,0 +1,10 @@
+.card-img-top {
+  height: 600px;
+  object-fit: cover;
+}
+.size-btn.active, .category-btn.active {
+  outline: 2px solid #000;
+}
+.sticky-total {
+  position: static; /* NOT fixed; as requested */
+}

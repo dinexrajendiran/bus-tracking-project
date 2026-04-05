@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <!-- Driver Login -->
+    <div class="card shadow-sm" id="loginCard">
+      <div class="card-header">Driver Login</div>
+      <div class="card-body">
+        <input id="u" class="form-control mb-2" placeholder="username">
+        <input id="p" type="password" class="form-control mb-3" placeholder="password">
+        <button class="btn btn-dark w-100" onclick="login()">Login</button>
+        <div id="msg" class="small mt-2 text-muted"></div>
+      </div>
+    </div>
+
+    <!-- Start Trip -->
+    <div class="card mt-3 d-none" id="tripCard">
+      <div class="card-header">Start Trip</div>
+      <div class="card-body">
+        <label class="form-label">Bus</label>
+        <select id="bus" class="form-select">
+          {% for b in buses %}
+            <option value="{{ b.id }}">{{ b.name }}</option>
+          {% endfor %}
+        </select>
+
+        <label class="form-label mt-2">Schedule</label>
+        <select id="schedule" class="form-select">
+          {% for s in schedules %}
+            <option value="{{ s.id }}" data-bus-id="{{ s.bus_id }}">
+              {{ s.bus_name }} — {{ s.title }}
+            </option>
+          {% endfor %}
+        </select>
+
+        <div class="mt-3">
+          <button id="start" class="btn btn-success" onclick="startTrip()">Start</button>
+          <button id="stop" class="btn btn-outline-danger ms-2" onclick="stopTrip()" disabled>Stop</button>
+        </div>
+        <div id="status" class="small mt-2 text-muted"></div>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="card mt-3 d-none" id="timelineCard">
+      <div class="card-header">Bus Timeline</div>
+      <div class="card-body" id="timeline"></div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card shadow-sm d-none" id="mapCard">
+      <div class="card-header">Map</div>
+      <div class="card-body p-0">
+        <div id="map" style="height:500px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css"/>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+<script>
+let map = null;
+let busMarker = null, routeControl = null, timer = null;
+let stopsMarkers = [];
+
+// Driver login
+function login() {
+  const username = document.getElementById('u').value;
+  const password = document.getElementById('p').value;
+  fetch('/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username, password})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      document.getElementById('msg').innerText = `Logged in as ${d.role}`;
+      document.getElementById('loginCard').classList.add('d-none');
+      document.getElementById('tripCard').classList.remove('d-none');
+      document.getElementById('mapCard').classList.remove('d-none');
+
+      // Initialize map only after login
+      map = L.map('map').setView([11.01, 76.97], 12);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+    } else {
+      document.getElementById('msg').innerText = 'Login failed';
+    }
+  });
+}
+
+// Filter schedules when bus selection changes
+document.addEventListener('DOMContentLoaded', () => {
+  const busSelect = document.getElementById('bus');
+  const scheduleSelect = document.getElementById('schedule');
+
+  function filterSchedules() {
+    const selectedBusId = busSelect.value;
+    const options = scheduleSelect.querySelectorAll('option');
+
+    options.forEach(opt => {
+      if (opt.dataset.busId === selectedBusId) {
+        opt.hidden = false;
+      } else {
+        opt.hidden = true;
+      }
+    });
+
+    // Automatically select first visible schedule
+    const firstVisible = Array.from(options).find(opt => !opt.hidden);
+    if (firstVisible) {
+      scheduleSelect.value = firstVisible.value;
+    }
+  }
+
+  busSelect.addEventListener('change', filterSchedules);
+
+  // Filter once on load
+  filterSchedules();
+});
+
+// Send location to server
+function sendLocation(lat, lng) {
+  fetch('/api/update-location', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({bus_id: document.getElementById('bus').value, lat, lng})
+  });
+}
+
+// Start trip
+function startTrip() {
+  const bus_id = document.getElementById('bus').value;
+  const schedule_id = document.getElementById('schedule').value;
+
+  document.getElementById('start').disabled = true;
+  document.getElementById('stop').disabled = false;
+
+  fetch(`/api/schedule-stops?schedule_id=${schedule_id}`).then(r => r.json()).then(stops => {
+    if (stops.length < 2) return;
+
+    // Timeline
+    const timelineDiv = document.getElementById('timeline');
+    timelineDiv.innerHTML = "";
+
+    // Remove old markers
+    stopsMarkers.forEach(m => map.removeLayer(m));
+    stopsMarkers = [];
+
+    stops.forEach((s, i) => {
+      const upDown = (i % 2 == 0) ? '⬆' : '⬇';
+
+      // Compute departure as arrival + 5 min
+      const [h, m] = s.arrival.split(':').map(Number);
+      let depH = h;
+      let depM = m + 5;
+      if (depM >= 60) {
+        depH += Math.floor(depM / 60);
+        depM %= 60;
+      }
+      if (depH >= 24) depH -= 24;
+      const departure = `${depH.toString().padStart(2,'0')}:${depM.toString().padStart(2,'0')}`;
+
+      const div = document.createElement('div');
+      div.innerHTML = `${upDown} <b>${s.name}</b> (${s.arrival} - ${departure})`;
+      timelineDiv.appendChild(div);
+
+      // Mark bus stop on map
+      const marker = L.marker([s.lat, s.lng], {
+        icon: L.divIcon({ html:'🛑', className:'bus-stop-icon', iconSize:[30,30] })
+      }).addTo(map).bindPopup(`${s.name}<br>${s.arrival} - ${departure}`);
+      stopsMarkers.push(marker);
+    });
+    document.getElementById('timelineCard').classList.remove('d-none');
+
+    // Draw blue route along roads
+    const waypoints = stops.map(s => L.latLng(s.lat, s.lng));
+    if (routeControl) map.removeControl(routeControl);
+    routeControl = L.Routing.control({
+      waypoints: waypoints,
+      draggableWaypoints: false,
+      addWaypoints: false,
+      routeWhileDragging: false,
+      show: false,
+      lineOptions: { styles:[{color:'blue', opacity:0.7, weight:5}] }
+    }).addTo(map);
+
+    // Start GPS tracking every 5 sec
+    if (timer) clearInterval(timer);
+    const tick = () => {
+      if (!navigator.geolocation) {
+        alert('Geolocation not supported by your browser.');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(pos => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+
+        if (!busMarker) {
+          busMarker = L.marker([lat, lng], {
+            icon: L.divIcon({ html:'🚌', className:'bus-icon', iconSize:[30,30] })
+          }).addTo(map).bindPopup('My Bus');
+        } else {
+          busMarker.setLatLng([lat, lng]);
+        }
+
+        sendLocation(lat, lng);
+        document.getElementById('status').innerText = `Location: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      }, error => {
+        console.error("GPS error:", error.message);
+        document.getElementById('status').innerText = `GPS error: ${error.message}`;
+      }, { enableHighAccuracy: true });
+    };
+    tick(); // initial
+    timer = setInterval(tick, 5000);
+  });
+}
+
+// Stop trip
+function stopTrip() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  document.getElementById('start').disabled = false;
+  document.getElementById('stop').disabled = true;
+  document.getElementById('status').innerText = 'Trip stopped';
+}
+</script>
+
+<style>
+#timeline div { margin: 6px 0; font-size: 14px; }
+.bus-icon { font-size: 24px; text-align: center; line-height: 24px; }
+.bus-stop-icon { font-size: 20px; text-align: center; line-height: 20px; }
+</style>
+{% endblock %}

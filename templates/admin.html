@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <!-- Admin Login -->
+    <div class="card shadow-sm" id="loginCard">
+      <div class="card-header">Admin Login</div>
+      <div class="card-body">
+        <input id="u" class="form-control mb-2" placeholder="username">
+        <input id="p" type="password" class="form-control mb-3" placeholder="password">
+        <button class="btn btn-dark w-100" onclick="login()">Login</button>
+        <div id="msg" class="small mt-2 text-muted"></div>
+      </div>
+    </div>
+
+    <!-- Admin Controls -->
+    <div class="card mt-3 d-none" id="adminCard">
+      <div class="card-header">Admin Panel</div>
+      <div class="card-body">
+        <div>
+          <h6>Add Bus</h6>
+          <input id="busName" class="form-control mb-1" placeholder="Bus Name">
+          <button class="btn btn-sm btn-success mb-2 w-100" onclick="addBus()">Add Bus</button>
+        </div>
+        <div>
+          <h6>Add Driver</h6>
+          <input id="driverName" class="form-control mb-1" placeholder="Name">
+          <input id="driverUser" class="form-control mb-1" placeholder="Username">
+          <input id="driverPass" type="password" class="form-control mb-1" placeholder="Password">
+          <select id="driverBus" class="form-select mb-1"><option value="">Select Bus</option></select>
+          <button class="btn btn-sm btn-success mb-2 w-100" onclick="addDriver()">Add Driver</button>
+        </div>
+        <div>
+          <h6>Add Stop</h6>
+          <input id="stopName" class="form-control mb-1" placeholder="Stop Name">
+          <input id="stopLat" type="number" step="0.0001" class="form-control mb-1" placeholder="Latitude">
+          <input id="stopLng" type="number" step="0.0001" class="form-control mb-1" placeholder="Longitude">
+          <button class="btn btn-sm btn-success mb-2 w-100" onclick="addStop()">Add Stop</button>
+        </div>
+        <div>
+          <h6>Add Schedule/Route</h6>
+          <select id="scheduleBus" class="form-select mb-1"><option value="">Select Bus</option></select>
+          <input id="scheduleTitle" class="form-control mb-1" placeholder="Route Title">
+          <input id="scheduleStops" class="form-control mb-1" placeholder="Stop IDs (comma-separated)">
+          <button class="btn btn-sm btn-success mb-2 w-100" onclick="addSchedule()">Add Schedule</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card shadow-sm d-none" id="listsCard">
+      <div class="card-header">Lists</div>
+      <div class="card-body">
+        <h6>Buses</h6>
+        <ul id="busList" class="list-group mb-2"></ul>
+        <h6>Drivers</h6>
+        <ul id="driverList" class="list-group mb-2"></ul>
+        <h6>Stops</h6>
+        <ul id="stopList" class="list-group mb-2"></ul>
+        <h6>Schedules</h6>
+        <ul id="scheduleList" class="list-group mb-2"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let buses = {{ buses | tojson }};
+let drivers = {{ drivers | tojson }};
+let stops = {{ stops | tojson }};
+let schedules = [];
+
+function login() {
+  const username = document.getElementById('u').value;
+  const password = document.getElementById('p').value;
+  if (username === 'admin' && password === 'admin123') {
+    document.getElementById('loginCard').classList.add('d-none');
+    document.getElementById('adminCard').classList.remove('d-none');
+    document.getElementById('listsCard').classList.remove('d-none');
+    renderLists();
+    populateBusSelects();
+  } else {
+    document.getElementById('msg').innerText = 'Login failed';
+  }
+}
+
+function renderLists() {
+  const busUl = document.getElementById('busList');
+  busUl.innerHTML = '';
+  buses.forEach((b, i) => {
+    const li = document.createElement('li');
+    li.className = "list-group-item d-flex justify-content-between align-items-center";
+    li.innerHTML = `${b.name} <button class="btn btn-sm btn-danger" onclick="deleteBus(${i})">Delete</button>`;
+    busUl.appendChild(li);
+  });
+
+  const driverUl = document.getElementById('driverList');
+  driverUl.innerHTML = '';
+  drivers.forEach((d, i) => {
+    const li = document.createElement('li');
+    li.className = "list-group-item d-flex justify-content-between align-items-center";
+    li.innerHTML = `${d.name} (${d.username}) [Bus: ${d.bus_name || '-'}] <button class="btn btn-sm btn-danger" onclick="deleteDriver(${i})">Delete</button>`;
+    driverUl.appendChild(li);
+  });
+
+  const stopUl = document.getElementById('stopList');
+  stopUl.innerHTML = '';
+  stops.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.className = "list-group-item d-flex justify-content-between align-items-center";
+    li.innerHTML = `${s.name} (${s.lat},${s.lng}) <button class="btn btn-sm btn-danger" onclick="deleteStop(${i})">Delete</button>`;
+    stopUl.appendChild(li);
+  });
+
+  const schedUl = document.getElementById('scheduleList');
+  schedUl.innerHTML = '';
+  schedules.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.className = "list-group-item d-flex justify-content-between align-items-center";
+    li.innerHTML = `${s.title} [Bus: ${s.bus_name}] <button class="btn btn-sm btn-danger" onclick="deleteSchedule(${i})">Delete</button>`;
+    schedUl.appendChild(li);
+  });
+}
+
+function populateBusSelects() {
+  const driverBus = document.getElementById('driverBus');
+  const scheduleBus = document.getElementById('scheduleBus');
+  driverBus.innerHTML = '<option value="">Select Bus</option>';
+  scheduleBus.innerHTML = '<option value="">Select Bus</option>';
+  buses.forEach(b => {
+    driverBus.innerHTML += `<option value="${b.id}">${b.name}</option>`;
+    scheduleBus.innerHTML += `<option value="${b.id}">${b.name}</option>`;
+  });
+}
+
+function addBus() {
+  const name = document.getElementById('busName').value.trim();
+  if (!name) return alert('Enter bus name');
+  fetch('/api/add-bus', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      buses.push({id: data.id, name});
+      renderLists();
+      populateBusSelects();
+      document.getElementById('busName').value = '';
+    } else {
+      alert(data.error || 'Error adding bus');
+    }
+  });
+}
+
+function addDriver() {
+  const name = document.getElementById('driverName').value.trim();
+  const username = document.getElementById('driverUser').value.trim();
+  const password = document.getElementById('driverPass').value.trim();
+  const bus_id = document.getElementById('driverBus').value;
+  if (!name || !username || !password) return alert('Fill all fields');
+  fetch('/api/add-driver', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, username, password, bus_id})
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      const bus_name = buses.find(b => b.id == bus_id)?.name || null;
+      drivers.push({id: data.id, name, username, password, bus_name});
+      renderLists();
+      document.getElementById('driverName').value = '';
+      document.getElementById('driverUser').value = '';
+      document.getElementById('driverPass').value = '';
+      document.getElementById('driverBus').value = '';
+    } else {
+      alert(data.error || 'Error adding driver');
+    }
+  });
+}
+
+function addStop() {
+  const name = document.getElementById('stopName').value.trim();
+  const lat = parseFloat(document.getElementById('stopLat').value);
+  const lng = parseFloat(document.getElementById('stopLng').value);
+  if (!name || isNaN(lat) || isNaN(lng)) return alert('Fill all fields correctly');
+  fetch('/api/add-stop', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, lat, lng})
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      stops.push({id: data.id, name, lat, lng});
+      renderLists();
+      document.getElementById('stopName').value = '';
+      document.getElementById('stopLat').value = '';
+      document.getElementById('stopLng').value = '';
+    } else {
+      alert(data.error || 'Error adding stop');
+    }
+  });
+}
+
+function addSchedule() {
+  const bus_id = document.getElementById('scheduleBus').value;
+  const title = document.getElementById('scheduleTitle').value.trim();
+  const stop_ids_raw = document.getElementById('scheduleStops').value.trim();
+  if (!bus_id || !title || !stop_ids_raw) return alert('Fill all fields');
+  const stop_ids = stop_ids_raw.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+  if (stop_ids.length < 2) return alert('At least 2 valid stop IDs required');
+  fetch('/api/add-schedule', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({bus_id, title, stop_ids})
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.ok) {
+      const bus_name = buses.find(b => b.id == bus_id)?.name;
+      schedules.push({id: data.id, title, bus_name});
+      renderLists();
+      document.getElementById('scheduleBus').value = '';
+      document.getElementById('scheduleTitle').value = '';
+      document.getElementById('scheduleStops').value = '';
+    } else {
+      alert(data.error || 'Error adding schedule');
+    }
+  });
+}
+
+// Delete functions (frontend-only)
+function deleteBus(i) { buses.splice(i, 1); renderLists(); populateBusSelects(); }
+function deleteDriver(i) { drivers.splice(i, 1); renderLists(); }
+function deleteStop(i) { stops.splice(i, 1); renderLists(); }
+function deleteSchedule(i) { schedules.splice(i, 1); renderLists(); }
+</script>
+
+<style>
+.list-group-item button {
+  font-size: 12px;
+}
+</style>
+{% endblock %}

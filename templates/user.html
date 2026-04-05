@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <!-- Search Buses -->
+    <div class="card shadow-sm">
+      <div class="card-header">Search Buses</div>
+      <div class="card-body">
+        <label class="form-label">From</label>
+        <select id="fromStop" class="form-select">
+          {% for s in stops %}<option value="{{s.id}}">{{s.name}}</option>{% endfor %}
+        </select>
+        <label class="form-label mt-2">To</label>
+        <select id="toStop" class="form-select">
+          {% for s in stops %}<option value="{{s.id}}">{{s.name}}</option>{% endfor %}
+        </select>
+        <button class="btn btn-success w-100 mt-3" onclick="search()">Find</button>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="card mt-3">
+      <div class="card-header">Results</div>
+      <ul id="results" class="list-group list-group-flush"></ul>
+    </div>
+
+    <!-- Bus Timeline -->
+    <div class="card mt-3 d-none" id="timelineCard">
+      <div class="card-header">Bus Timeline</div>
+      <div class="card-body" id="timeline"></div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header">Live Map</div>
+      <div class="card-body p-0">
+        <div id="map" style="height:500px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css"/>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+<script>
+let map = L.map('map').setView([11.01, 76.97], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
+
+let liveMarker = null, routeControl = null;
+let stopsMarkers = [];
+
+// Search buses
+function search(){
+  const from_id = document.getElementById('fromStop').value;
+  const to_id = document.getElementById('toStop').value;
+
+  fetch(`/api/search?from_id=${from_id}&to_id=${to_id}`).then(r=>r.json()).then(rows=>{
+    const ul = document.getElementById('results'); 
+    ul.innerHTML = "";
+    document.getElementById('timelineCard').classList.add('d-none');
+
+    if(!rows.length){ ul.innerHTML="<li class='list-group-item'>No buses</li>"; return; }
+
+    rows.forEach(x=>{
+      const li = document.createElement('li'); 
+      li.className="list-group-item d-flex justify-content-between align-items-center";
+      li.innerHTML = `<div><b>${x.bus_name}</b> — ${x.title}<br>
+                      <span class='small text-muted'>Departs: ${x.from_time} • Arrives: ${x.to_time}</span></div>
+                      <button class="btn btn-outline-primary btn-sm">Track</button>`;
+      li.querySelector('button').onclick = ()=>trackBus(x.bus_id, x.schedule_id);
+      ul.appendChild(li);
+    });
+  });
+}
+
+// Track bus
+function trackBus(bus_id, schedule_id){
+  fetch(`/api/schedule-stops?schedule_id=${schedule_id}`).then(r=>r.json()).then(stops=>{
+    if(stops.length<2) return;
+
+    // Show timeline with departure = arrival + 5 min
+    const timelineDiv = document.getElementById('timeline');
+    timelineDiv.innerHTML="";
+    stops.forEach((s,i)=>{
+      const upDown = (i%2==0)?'⬆':'⬇';
+
+      // Compute departure as arrival + 5 min
+      const [h, m] = s.arrival.split(':').map(Number);
+      let depH = h;
+      let depM = m + 5;
+      if(depM >= 60){ depH += Math.floor(depM/60); depM = depM % 60; }
+      if(depH >= 24) depH -= 24;
+      const departure = `${depH.toString().padStart(2,'0')}:${depM.toString().padStart(2,'0')}`;
+
+      const div = document.createElement('div');
+      div.innerHTML = `${upDown} <b>${s.name}</b> (${s.arrival} - ${departure})`;
+      timelineDiv.appendChild(div);
+    });
+    document.getElementById('timelineCard').classList.remove('d-none');
+
+    // Remove old route and markers
+    if(routeControl){ map.removeControl(routeControl); }
+    stopsMarkers.forEach(m=>map.removeLayer(m));
+    stopsMarkers = [];
+
+    // Draw blue route along roads
+    const waypoints = stops.map(s=>L.latLng(s.lat,s.lng));
+    routeControl = L.Routing.control({
+      waypoints: waypoints,
+      draggableWaypoints:false,
+      addWaypoints:false,
+      routeWhileDragging:false,
+      show:false,
+      lineOptions:{styles:[{color:'blue',opacity:0.7,weight:5}]}
+    }).addTo(map);
+
+    // Add bus stop markers
+    stops.forEach(s=>{
+      const m = L.marker([s.lat,s.lng], {icon:L.divIcon({html:'🛑', className:'bus-stop-icon', iconSize:[30,30]})})
+                 .addTo(map).bindPopup(`${s.name}<br>${s.arrival}-${s.departure}`);
+      stopsMarkers.push(m);
+    });
+
+    // Update bus position every 5 seconds without refreshing map
+    if(liveMarker) map.removeLayer(liveMarker);
+    liveMarker = null;
+
+    function updateBus(){
+      fetch(`/api/bus-location/${bus_id}`).then(r=>r.json()).then(d=>{
+        if(!d.lat) return;
+        const latlng = [d.lat,d.lng];
+        if(!liveMarker){
+          liveMarker = L.marker(latlng,{icon:L.divIcon({html:'🚌', className:'bus-icon', iconSize:[30,30]})})
+                         .addTo(map).bindPopup('Bus');
+        } else liveMarker.setLatLng(latlng);
+      });
+    }
+    updateBus();
+    setInterval(updateBus,5000);
+  });
+}
+</script>
+
+<style>
+#timeline div{margin:6px 0;font-size:14px;}
+.bus-icon{font-size:24px;text-align:center;line-height:24px;}
+.bus-stop-icon{font-size:20px;text-align:center;line-height:20px;}
+</style>
+{% endblock %}
